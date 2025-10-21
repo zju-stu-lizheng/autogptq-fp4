@@ -1,0 +1,2 @@
+use  256  examples from /disk1/model/AutoGPTQ/30b_calibration.json for calibration
+/disk1/model/Qwen3-30B-A3B Qwen3-30Ba3-Instruct-nvfp4-pseudo-256

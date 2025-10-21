@@ -32,6 +32,7 @@ class CHECKPOINT_FORMAT:
 class QUANT_METHOD:
     GPTQ = "gptq"
     AWQ = "awq"
+    NVFP4 = "nvfp4"
 
 
 QUANT_METHOD_FORMAT_MAPPING = {
@@ -41,6 +42,9 @@ QUANT_METHOD_FORMAT_MAPPING = {
     },
     QUANT_METHOD.AWQ: {
         CHECKPOINT_FORMAT.AWQ_GEMM
+    },
+    QUANT_METHOD.NVFP4: {
+        CHECKPOINT_FORMAT.GPTQ,
     }
 }
 

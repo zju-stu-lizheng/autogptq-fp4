@@ -299,7 +299,12 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names if n in full}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name])
+                    # 根据量化方法选择相应的GPTQ实例
+                    if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
+                        gptq[name] = GPTQ(subset[name], quant_method="nvfp4")
+                    else:
+                        gptq[name] = GPTQ(subset[name], quant_method="int")
+                    
                     gptq[name].quantizer.configure(
                         self.quantize_config.bits,
                         perchannel=True,
@@ -337,14 +342,27 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
 
                 for name in subset:
                     logger.info(f"Quantizing {name} in layer {i + 1}/{len(layers)}...")
-                    scale, zero, g_idx = gptq[name].fasterquant(
-                        percdamp=self.quantize_config.damp_percent,
-                        group_size=self.quantize_config.group_size,
-                        actorder=self.quantize_config.desc_act,
-                        static_groups=self.quantize_config.static_groups,
-                    )
+                    
+                    # 根据量化方法调用相应的fasterquant
+                    if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
+                        scale, zero, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act,
+                            static_groups=self.quantize_config.static_groups,
+                            quant_method="nvfp4",
+                            nvfp4_block_size=16,
+                        )
+                    else:
+                        scale, zero, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act,
+                            static_groups=self.quantize_config.static_groups,
+                        )
+                    # 保存GPTQ对象以便后续伪量化使用
                     quantizers[f"{self.layers_block_name}.{i}.{name}"] = (
-                        gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                        gptq[name],  # 保存整个GPTQ对象
                         move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
                         move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
                         move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device),
@@ -376,18 +394,22 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             layer_inputs, layer_outputs = layer_outputs, []  # TODO: is it really OK to cache only the first positional argument?
             torch.cuda.empty_cache()
 
-        pack_model(
-            model=self.model,
-            quantizers=quantizers,
-            bits=self.quantize_config.bits,
-            group_size=self.quantize_config.group_size,
-            use_triton=use_triton,
-            use_cuda_fp16=use_cuda_fp16,
-            desc_act=self.quantize_config.desc_act,
-            warmup_triton=autotune_warmup_after_quantized,
-            force_layer_back_to_cpu=force_layer_back_to_cpu,
-            use_marlin=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.MARLIN,
-        )
+        # 对于nvfp4方法，跳过pack_model步骤，因为我们要保存反量化的权重
+        if not (hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4"):
+            pack_model(
+                model=self.model,
+                quantizers=quantizers,
+                bits=self.quantize_config.bits,
+                group_size=self.quantize_config.group_size,
+                use_triton=use_triton,
+                use_cuda_fp16=use_cuda_fp16,
+                desc_act=self.quantize_config.desc_act,
+                warmup_triton=autotune_warmup_after_quantized,
+                force_layer_back_to_cpu=force_layer_back_to_cpu,
+                use_marlin=self.quantize_config.checkpoint_format == CHECKPOINT_FORMAT.MARLIN,
+            )
+        else:
+            logger.info("跳过pack_model步骤，因为使用nvfp4方法将保存反量化的权重")
         if device_map:
             self.model = remove_hook_from_module(self.model, recurse=True)
             self.model = simple_dispatch_model(self.model, device_map)
@@ -506,11 +528,15 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         safetensors_metadata: Optional[Dict[str, str]] = None,
     ):
         """save quantized model and configs to local disk"""
-        os.makedirs(save_dir, exist_ok=True)
-
         if not self.quantized:
             raise EnvironmentError("can only save quantized model, please execute .quantize first.")
-
+        
+        # 对于nvfp4方法，重定向到伪量化保存
+        if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
+            logger.info("检测到nvfp4量化方法，使用伪量化保存")
+            return self.save_pseudo_quantized(save_dir, use_safetensors, safetensors_metadata)
+        
+        os.makedirs(save_dir, exist_ok=True)
         self.model.to(CPU)
 
         model_base_name = (
@@ -575,6 +601,66 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         self.quantize_config.save_pretrained(save_dir)
         self.quantize_config.model_name_or_path = save_dir
         self.quantize_config.model_file_base_name = model_base_name
+
+    def save_pseudo_quantized(
+        self,
+        save_dir: str,
+        use_safetensors: bool = True,
+        safetensors_metadata: Optional[Dict[str, str]] = None,
+        nvfp4_block_size: int = 16,
+    ):
+        """
+        保存伪量化的模型：先进行nvfp4量化，然后保存为float16精度的模型
+        
+        Args:
+            save_dir: 保存目录
+            use_safetensors: 是否使用safetensors格式
+            safetensors_metadata: safetensors元数据
+            nvfp4_block_size: NVFP4量化的块大小
+        """
+        if not self.quantized:
+            raise EnvironmentError("can only save quantized model, please execute .quantize first.")
+            
+        # 检查是否使用了nvfp4量化
+        # if not hasattr(self, 'quantizers') or not self.quantizers:
+        #     raise EnvironmentError("No quantizers found. Please ensure the model was quantized with nvfp4 method.")
+            
+        os.makedirs(save_dir, exist_ok=True)
+        self.model.to(CPU)
+        
+        # 直接保存整个模型
+        model_base_name = (
+            self.quantize_config.model_file_base_name
+            or f"pseudo_quantized_model-{self.quantize_config.bits}bit-{self.quantize_config.group_size}g"
+        )
+        
+        if use_safetensors:
+            model_save_name = model_base_name + ".safetensors"
+            
+            # 准备元数据
+            if safetensors_metadata is None:
+                safetensors_metadata = {}
+            safetensors_metadata["format"] = "pt"
+            safetensors_metadata["quantization_type"] = "pseudo_quantized_nvfp4"
+            safetensors_metadata["nvfp4_block_size"] = str(nvfp4_block_size)
+            
+            # 保存整个模型
+            self.model.save_pretrained(save_dir, safe_serialization=True, max_shard_size="5GB")
+        else:
+            model_save_name = model_base_name + ".bin"
+            
+            # 保存整个模型
+            self.model.save_pretrained(save_dir, safe_serialization=False, max_shard_size="5GB")
+        
+        # 保存配置
+        # self.model.config.quantization_config = self.quantize_config.to_dict()
+        self.model.config.save_pretrained(save_dir)
+        # self.quantize_config.save_pretrained(save_dir)
+        self.quantize_config.model_name_or_path = save_dir
+        self.quantize_config.model_file_base_name = model_base_name
+        
+        logger.info(f"伪量化模型已保存到: {save_dir}")
+        logger.info(f"模型文件: {model_save_name}")
 
     def save_pretrained(
         self,

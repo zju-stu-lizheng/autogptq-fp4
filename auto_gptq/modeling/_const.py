@@ -20,6 +20,8 @@ SUPPORTED_MODELS = [
     "baichuan",
     "internlm",
     "qwen",
+    "qwen3",
+    "qwen3_moe",
     "xverse",
     "deci",
     "stablelm_epoch",
@@ -47,6 +49,8 @@ if compare_transformers_version("v4.39.0.dev0", op="ge"):
     SUPPORTED_MODELS.append("starcoder2")
 if compare_transformers_version("v4.43.0.dev0", op="ge"):
     SUPPORTED_MODELS.append("gemma2")    
+if compare_transformers_version("v4.51.0", op="ge"):
+    SUPPORTED_MODELS.append("qwen3_moe")
 
 EXLLAMA_DEFAULT_MAX_INPUT_LENGTH = 2048
 

@@ -24,6 +24,8 @@ from .opt import OPTGPTQForCausalLM
 from .phi import PhiGPTQForCausalLM
 from .qwen import QwenGPTQForCausalLM
 from .qwen2 import Qwen2GPTQForCausalLM
+from .qwen3 import Qwen3GPTQForCausalLM
+from .qwen3_moe import Qwen3MOEGPTQForCausalLM
 from .rw import RWGPTQForCausalLM
 from .stablelmepoch import StableLMEpochGPTQForCausalLM
 from .starcoder2 import Starcoder2GPTQForCausalLM
@@ -49,6 +51,8 @@ GPTQ_CAUSAL_LM_MODEL_MAP = {
     "baichuan": BaiChuanGPTQForCausalLM,
     "internlm": InternLMGPTQForCausalLM,
     "qwen": QwenGPTQForCausalLM,
+    "qwen3": Qwen3GPTQForCausalLM,
+    "qwen3_moe": Qwen3MOEGPTQForCausalLM,
     "mistral": MistralGPTQForCausalLM,
     "minicpm3":MiniCPM3GPTQForCausalLM,
     "Yi": YiGPTQForCausalLM,
