@@ -159,6 +159,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+*.out
 Qwen3-*
 qwen3-0.6-*
 30b_calibration_data.json
+30b_calibration.json
+*.json

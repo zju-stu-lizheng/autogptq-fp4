@@ -5,7 +5,7 @@ import logging
 import torch
 from datasets import load_dataset
 from typing import Union, List
-from utils import get_calibration_data_gptq
+from utils import get_calibration_data_gptq, get_wikitext2, get_cn_calibration_data, get_combined_calibration_data, get_en_calibration_data
 import argparse
 
 # 解析命令行参数
@@ -24,6 +24,10 @@ parser.add_argument('--desc_act', action='store_true', default=False,
                     help='是否使用desc_act')
 parser.add_argument('--quantized_model_dir', type=str, default=None,
                     help='量化模型保存目录')
+parser.add_argument('--dataset', type=str, default='wikitext2',
+                    help='数据集，默认为wikitext2')
+parser.add_argument('--only_quantize_mlp', action='store_true', default=False,
+                    help='是否只量化MLP层')
 args = parser.parse_args()
 
 logging.basicConfig(
@@ -35,10 +39,10 @@ if args.model_name == "Qwen3-30Ba3":
     pretrained_model_dir = f"/disk1/model/Qwen3-30B-A3B"
 else:
     pretrained_model_dir = f"/disk1/model/Qwen3-0.6B"
-examples = get_calibration_data_gptq(pretrained_model_dir=pretrained_model_dir,
-                                    num_calibrations=args.num_calibrations,
-                                    max_length=args.max_length,
-                                    use_shuffle=True)
+# examples = get_calibration_data_gptq(pretrained_model_dir=pretrained_model_dir,
+#                                     num_calibrations=args.num_calibrations,
+#                                     max_length=args.max_length,
+#                                     use_shuffle=True)
 if args.quantized_model_dir is None:
     quantized_model_dir = f"{args.model_name}-Instruct-nvfp4-pseudo-{args.num_calibrations}-new"
 else:
@@ -62,9 +66,25 @@ else:
     model = AutoGPTQForCausalLM.from_pretrained(pretrained_model_dir, quantize_config, max_memory={i: "50GB" for i in range(1)})
 
 # quantize model, the examples should be list of dict whose keys can only be "input_ids" and "attention_mask"
-model.quantize(examples, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(examples)))  # nvfp4不使用triton
+# model.quantize(examples, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(examples)))  # nvfp4不使用triton
 
-del examples
+if args.dataset == 'wikitext2':
+    traindataset, testenc = get_wikitext2(args.num_calibrations, 0, args.max_length, pretrained_model_dir)
+    model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp)  # nvfp4不使用triton
+
+elif args.dataset == 'cn':
+    traindataset = get_cn_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
+    model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp)  # nvfp4不使用triton
+elif args.dataset == 'combined':
+    traindataset = get_combined_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
+    model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
+elif args.dataset == 'en':
+    traindataset = get_en_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
+    model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
+else:
+    raise ValueError(f"Invalid dataset: {args.dataset}")
+
+# del examples
 ## 清除显存占用
 torch.cuda.empty_cache()
 

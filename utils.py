@@ -68,3 +68,73 @@ def get_calibration_data_gptq(pretrained_model_dir, num_calibrations=8192, max_l
 
     print('use ', len(examples), f' examples from {data_path} for calibration')
     return examples
+
+import numpy as np
+import torch
+def get_wikitext2(nsamples, seed, seqlen, model):
+    from datasets import load_dataset
+
+    traindata = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+    testdata = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+
+    from transformers import AutoTokenizer
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+    trainenc = tokenizer("\n\n".join(traindata["text"]), return_tensors="pt")
+    testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
+
+    import random
+
+    random.seed(seed)
+    np.random.seed(0)
+    torch.random.manual_seed(0)
+
+    traindataset = []
+    for _ in range(nsamples):
+        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
+        j = i + seqlen
+        inp = trainenc.input_ids[:, i:j]
+        attention_mask = torch.ones_like(inp)
+        traindataset.append({"input_ids": inp, "attention_mask": attention_mask})
+    return traindataset, testenc
+
+def get_cn_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
+    data_path = "ch_datas.json"
+    with open(data_path, "r", encoding="utf-8") as file:
+        dataset = json.load(file)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
+    data = []
+    for msg in dataset:
+        # text = tokenizer.apply_chat_template(msg, tokenize=False, add_generation_prompt=False)
+        data.append(msg.strip())
+    examples = get_calib_dataset(data, tokenizer, n_samples=num_calibrations, max_seq_len=max_length)
+    return examples
+
+def get_combined_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
+    data_path = "combined_datas.json"
+    print(f"use {data_path} for calibration")
+    with open(data_path, "r", encoding="utf-8") as file:
+        dataset = json.load(file)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
+    data = []
+    for msg in dataset:
+        # text = tokenizer.apply_chat_template(msg, tokenize=False, add_generation_prompt=False)
+        data.append(msg.strip())
+    examples = get_calib_dataset(data, tokenizer, n_samples=num_calibrations, max_seq_len=max_length)
+    return examples
+
+def get_en_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
+    data_path = "en_datas.json"
+    print(f"use {data_path} for calibration")
+    with open(data_path, "r", encoding="utf-8") as file:
+        dataset = json.load(file)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
+    data = []
+    for msg in dataset:
+        # text = tokenizer.apply_chat_template(msg, tokenize=False, add_generation_prompt=False)
+        data.append(msg.strip())
+    examples = get_calib_dataset(data, tokenizer, n_samples=num_calibrations, max_seq_len=max_length)
+    return examples

@@ -182,6 +182,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         use_cuda_fp16: bool = True,
         autotune_warmup_after_quantized: bool = False,
         cache_examples_on_gpu: bool = True,
+        only_quantize_mlp: bool = False,
     ):
         if self.quantized:
             raise EnvironmentError("can't execute quantize because the model is quantized.")
@@ -294,7 +295,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 force_layer_back_to_cpu = True
             cur_layer_device = get_device(layer)
 
-            full = find_layers(layer)
+            full = find_layers(layer, ignore_names=["q_proj","k_proj","v_proj","o_proj"] if only_quantize_mlp else [])
             for names in inside_layer_modules:
                 subset = {n: full[n] for n in names if n in full}
                 gptq = {}
