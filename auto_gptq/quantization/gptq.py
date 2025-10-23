@@ -89,7 +89,8 @@ class NVFP4Quantizer:
             x = x.flatten(1)
         
         # 计算per-tensor缩放因子2
-        self.scale_2 = self.get_weights_scaling_factor_2(x)
+        if weight or self.scale_2 is None:
+            self.scale_2 = self.get_weights_scaling_factor_2(x).to(dev)
         
         # 计算per-block缩放因子
         self.scale = self.get_weights_scaling_factor(x, block_size, self.scale_2)

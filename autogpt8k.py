@@ -76,7 +76,12 @@ elif args.dataset == 'cn':
     traindataset = get_cn_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp)  # nvfp4不使用triton
 elif args.dataset == 'combined':
-    traindataset = get_combined_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
+    en_num_calibrations = args.num_calibrations // 3 * 2
+    cn_num_calibrations = args.num_calibrations - en_num_calibrations
+    train1dataset = get_en_calibration_data(pretrained_model_dir, en_num_calibrations, args.max_length)
+    train2dataset = get_cn_calibration_data(pretrained_model_dir, cn_num_calibrations, args.max_length)
+    traindataset = train1dataset + train2dataset
+    # traindataset = get_combined_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 elif args.dataset == 'en':
     traindataset = get_en_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
