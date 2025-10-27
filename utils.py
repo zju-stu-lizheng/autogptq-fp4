@@ -103,6 +103,7 @@ def get_wikitext2(nsamples, seed, seqlen, model):
 
 def get_cn_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
     data_path = "ch_datas.json"
+    print(f"use {data_path} for calibration, count: {num_calibrations}")
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
@@ -114,8 +115,8 @@ def get_cn_calibration_data(pretrained_model_dir, num_calibrations=8192, max_len
     return examples
 
 def get_combined_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
-    data_path = "combined_datas.json"
-    print(f"use {data_path} for calibration")
+    data_path = "sample_128.jsonl"
+    print(f"use {data_path} for calibration, count: {num_calibrations}")
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
@@ -128,7 +129,7 @@ def get_combined_calibration_data(pretrained_model_dir, num_calibrations=8192, m
 
 def get_en_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
     data_path = "en_datas.json"
-    print(f"use {data_path} for calibration")
+    print(f"use {data_path} for calibration, count: {num_calibrations}")
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)

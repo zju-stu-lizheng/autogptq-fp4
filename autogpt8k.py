@@ -39,10 +39,7 @@ if args.model_name == "Qwen3-30Ba3":
     pretrained_model_dir = f"/disk1/model/Qwen3-30B-A3B"
 else:
     pretrained_model_dir = f"/disk1/model/Qwen3-0.6B"
-# examples = get_calibration_data_gptq(pretrained_model_dir=pretrained_model_dir,
-#                                     num_calibrations=args.num_calibrations,
-#                                     max_length=args.max_length,
-#                                     use_shuffle=True)
+
 if args.quantized_model_dir is None:
     quantized_model_dir = f"{args.model_name}-Instruct-nvfp4-pseudo-{args.num_calibrations}-new"
 else:
@@ -76,18 +73,24 @@ elif args.dataset == 'cn':
     traindataset = get_cn_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp)  # nvfp4不使用triton
 elif args.dataset == 'combined':
-    en_num_calibrations = args.num_calibrations // 3 * 2
-    cn_num_calibrations = args.num_calibrations - en_num_calibrations
-    train1dataset = get_en_calibration_data(pretrained_model_dir, en_num_calibrations, args.max_length)
-    train2dataset = get_cn_calibration_data(pretrained_model_dir, cn_num_calibrations, args.max_length)
-    traindataset = train1dataset + train2dataset
+    # en_num_calibrations = args.num_calibrations // 3 * 2
+    # cn_num_calibrations = args.num_calibrations - en_num_calibrations
+    train1dataset = get_en_calibration_data(pretrained_model_dir, 128, args.max_length)
+    train2dataset = get_cn_calibration_data(pretrained_model_dir, 64, args.max_length)
+    train3dataset = get_combined_calibration_data(pretrained_model_dir, 64, args.max_length)
+    traindataset = train1dataset + train2dataset + train3dataset
     # traindataset = get_combined_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 elif args.dataset == 'en':
     traindataset = get_en_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 else:
-    raise ValueError(f"Invalid dataset: {args.dataset}")
+    # raise ValueError(f"Invalid dataset: {args.dataset}")
+    examples = get_calibration_data_gptq(pretrained_model_dir=pretrained_model_dir,
+                                    num_calibrations=args.num_calibrations,
+                                    max_length=args.max_length,
+                                    use_shuffle=True)
+    model.quantize(examples, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(examples)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 
 # del examples
 ## 清除显存占用
