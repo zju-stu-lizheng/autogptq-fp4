@@ -50,7 +50,7 @@ def find_layers(module, layers=None, name="", ignore_names=["q_proj","k_proj","v
             for ignore_name in ignore_names:
                 if ignore_name in name:
                     return {}
-            print(layer, name)
+            # print(layer, name)
             return {name: module}
     res = {}
     for name1, child in module.named_children():

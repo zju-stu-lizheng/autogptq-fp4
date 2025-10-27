@@ -153,6 +153,78 @@ class NVFP4Quantizer:
             output = dequantized_flat.view(original_shape)
 
         return output
+
+    def quantize_activation(self, x, block_size=16):
+        """
+        执行NVFP4量化，然后反量化回float16精度，用于激活量化
+        支持三维激活(batch, seq, feat)和二维(batch, feat)
+        """
+        dev = x.device
+        original_shape = x.shape
+
+        # 支持3维 (B, S, C) 或2维 (B, C)
+        if x.dim() == 3:
+            batch_size, seq_len, features = x.shape
+            x_reshape = x.contiguous().view(batch_size * seq_len, features)
+            reshape_back = True
+        else:
+            batch_size, features = x.shape
+            reshape_back = False
+            x_reshape = x
+
+        # 计算scale_2
+        scale_2 = self.get_weights_scaling_factor_2(x_reshape).to(dev).to(torch.float32)
+        # 计算scale
+        scale = self.get_weights_scaling_factor(x_reshape, block_size, scale_2).to(torch.float32)
+
+        # 展平
+        x_flat = x_reshape
+        flat_features = x_flat.shape[1]
+
+        # 检查是否需要填充
+        pad_size = 0
+        if flat_features % block_size != 0:
+            pad_size = block_size - (flat_features % block_size)
+            x_flat = torch.cat(
+                [x_flat, torch.zeros(x_flat.shape[0], pad_size, device=dev, dtype=x.dtype)],
+                dim=1
+            )
+            padded = True
+        else:
+            padded = False
+
+        num_blocks = x_flat.shape[1] // block_size
+
+        # 重塑为block格式 [N, num_blocks, block_size]
+        x_blocks = x_flat.view(x_flat.shape[0], num_blocks, block_size)
+
+        # scale形状对齐
+        if scale.dim() == 1:
+            scale = scale.unsqueeze(0)
+        if scale.shape[0] == 1 and x_blocks.shape[0] > 1:
+            scale = scale.expand(x_blocks.shape[0], -1)
+        scale_combined = (scale * scale_2).unsqueeze(-1)  # [N, num_blocks, 1]
+
+        scaled_weight = x_blocks / scale_combined
+
+        # 转换为NVFP4格式
+        fp4_values = self._cast_fp4(scaled_weight, dev)
+
+        # 反量化
+        dequantized = fp4_values * scale_combined
+
+        # 展平成2d，去除padding
+        dequantized_flat = dequantized.view(x_flat.shape[0], -1)
+        if padded:
+            dequantized_flat = dequantized_flat[:, :flat_features]
+
+        # 恢复原始形状
+        if reshape_back:  # 3维
+            output = dequantized_flat.view(batch_size, seq_len, features)
+        else:  # 2维
+            output = dequantized_flat.view(batch_size, features)
+
+        return output
         
     def ready(self):
         return self.ready_flag

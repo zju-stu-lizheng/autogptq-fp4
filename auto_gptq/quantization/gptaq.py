@@ -11,8 +11,8 @@ import transformers
 from .quantizer import Quantizer
 from .nvfp4_quantizer import NVFP4Quantizer
 import utils
-import quant_utils
-import model_utils
+# import quant_utils
+# import model_utils
 # 设置logger写入文件
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -46,27 +46,31 @@ class GPTAQ:
             self.quantizer = NVFP4Quantizer()
 
     def add_batch(self, inp, out):
+        ### quant_inp 用 inp 去走一遍fp4的量化+反量化过程，用于激活量化
+        quant_inp = self.quantizer.quantize_activation(inp, block_size=16)
 
         if len(inp.shape) == 2:
             inp = inp.unsqueeze(0)
+            quant_inp = quant_inp.unsqueeze(0)
         tmp = inp.shape[0]
         if len(inp.shape) == 3:
             inp = inp.reshape((-1, inp.shape[-1]))
+            quant_inp = quant_inp.reshape((-1, quant_inp.shape[-1]))
 
         inp = inp.t()
+        quant_inp = quant_inp.t()
 
         self.H *= self.nsamples / (self.nsamples + tmp)
         self.dXXT *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
         inp = math.sqrt(2 / self.nsamples) * inp.float()
-        self.H += inp.matmul(inp.t())
-        dX = self.fp_inp[0].float() * math.sqrt(2 / self.nsamples) - inp
-        self.dXXT += dX.matmul(inp.t())
-
-        del self.fp_inp[0]
+        self.H += quant_inp.matmul(quant_inp.t())
+        ## inp 是浮点输入，quant_inp 是量化后的输入
+        dX = inp - quant_inp.float() * math.sqrt(2 / self.nsamples)
+        self.dXXT += dX.matmul(quant_inp.t())
 
     def fasterquant(
-            self, blocksize=128, percdamp=.01, groupsize=-1, actorder=False, static_groups=False, alpha=0.25,
+            self, blocksize=128, percdamp=.01, group_size=-1, actorder=False, static_groups=False, alpha=0.25,
             quant_method="int", nvfp4_block_size=16
     ):
         W = self.layer.weight.data.clone()
@@ -90,9 +94,9 @@ class GPTAQ:
         if static_groups:
             import copy
             groups = []
-            for i in range(0, self.columns, groupsize):
+            for i in range(0, self.columns, group_size):
                 quantizer = copy.deepcopy(self.quantizer)
-                quantizer.find_params(W[:, i:(i + groupsize)])
+                quantizer.find_params(W[:, i:(i + group_size)])
                 groups.append(quantizer)
 
         if actorder:
@@ -131,15 +135,15 @@ class GPTAQ:
             #     w = W1[:, i]
             #     d = Hinv1[i, i]
 
-            #     if groupsize != -1:
+            #     if group_size != -1:
             #         if not static_groups:
-            #             if (i1 + i) % groupsize == 0:
-            #                 self.quantizer.find_params(W[:, (i1 + i):(i1 + i + groupsize)])
+            #             if (i1 + i) % group_size == 0:
+            #                 self.quantizer.find_params(W[:, (i1 + i):(i1 + i + group_size)])
             #         else:
             #             idx = i1 + i
             #             if actorder:
             #                 idx = perm[idx]
-            #             self.quantizer = groups[idx // groupsize]
+            #             self.quantizer = groups[idx // group_size]
 
             #     q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
             #     Q1[:, i] = q
@@ -160,7 +164,7 @@ class GPTAQ:
             else:
                 if actorder:
                     idx = perm[i1]
-                self.quantizer = groups[i1 // groupsize]
+                self.quantizer = groups[i1 // group_size]
             
             # 对整个block进行量化
             if quant_method == "nvfp4":
@@ -215,137 +219,139 @@ class GPTAQ:
         utils.cleanup_memory(verbos=False)
 
 
-@torch.no_grad()
-def gptaq_fwrd(model, dataloader, dev, args):
-    '''
-    From GPTQ repo
-    TODO: Make this function general to support both OPT and LLaMA models
-    '''
-    logging.info('-----GPTAQ Quantization-----')
+# @torch.no_grad()
+# def gptaq_fwrd(model, dataloader, dev, args):
+#     '''
+#     From GPTQ repo
+#     TODO: Make this function general to support both OPT and LLaMA models
+#     '''
+#     logging.info('-----GPTAQ Quantization-----')
 
-    use_cache = model.config.use_cache
-    model.config.use_cache = False
-    layers = model.model.layers
+#     use_cache = model.config.use_cache
+#     model.config.use_cache = False
+#     layers = model.model.layers
 
-    model.model.embed_tokens = model.model.embed_tokens.to(dev)
-    model.model.norm = model.model.norm.to(dev)
-    # model.model.rotary_emb = model.model.rotary_emb.to(dev)
+#     model.model.embed_tokens = model.model.embed_tokens.to(dev)
+#     model.model.norm = model.model.norm.to(dev)
+#     # model.model.rotary_emb = model.model.rotary_emb.to(dev)
 
-    layers[0] = layers[0].to(dev)
+#     layers[0] = layers[0].to(dev)
 
-    dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros(
-        (args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
-    )
+#     dtype = next(iter(model.parameters())).dtype
+#     inps = torch.zeros(
+#         (args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
+#     )
 
-    cache = {'i': 0, 'attention_mask': None}
+#     cache = {'i': 0, 'attention_mask': None}
 
-    class Catcher(nn.Module):
-            raise ValueError
+#     class Catcher(nn.Module):
+#             raise ValueError
 
-    layers[0] = Catcher(layers[0])
-    for batch in dataloader:
-        try:
-            model(batch[0].to(dev))
-        except ValueError:
-            pass
-    layers[0] = layers[0].module
+#     layers[0] = Catcher(layers[0])
+#     for batch in dataloader:
+#         try:
+#             model(batch[0].to(dev))
+#         except ValueError:
+#             pass
+#     layers[0] = layers[0].module
 
-    layers[0] = layers[0].cpu()
-    model.model.embed_tokens = model.model.embed_tokens.cpu()
-    model.model.norm = model.model.norm.cpu()
-    torch.cuda.empty_cache()
+#     layers[0] = layers[0].cpu()
+#     model.model.embed_tokens = model.model.embed_tokens.cpu()
+#     model.model.norm = model.model.norm.cpu()
+#     torch.cuda.empty_cache()
 
-    outs = torch.zeros_like(inps)
+#     outs = torch.zeros_like(inps)
 
-    attention_mask = cache['attention_mask']
-    position_ids = cache['position_ids']
+#     attention_mask = cache['attention_mask']
+#     position_ids = cache['position_ids']
 
-    quantizers = {}
-    sequential = [
-        ['self_attn.k_proj.module', 'self_attn.v_proj.module', 'self_attn.q_proj.module'],
-        ['self_attn.o_proj.module'],
-        ['mlp.up_proj.module', 'mlp.gate_proj.module'],
-        ['mlp.down_proj.module']
-    ]
+#     quantizers = {}
+#     sequential = [
+#         ['self_attn.k_proj.module', 'self_attn.v_proj.module', 'self_attn.q_proj.module'],
+#         ['self_attn.o_proj.module'],
+#         ['mlp.up_proj.module', 'mlp.gate_proj.module'],
+#         ['mlp.down_proj.module']
+#     ]
 
-    fp_inputs_cache = model_utils.FPInputsCache(sequential)
-    fp_inps = inps.clone()
+#     fp_inputs_cache = model_utils.FPInputsCache(sequential)
+#     fp_inps = inps.clone()
 
-    for i in range(len(layers)):
-        print(f'\nLayer {i}:', flush=True, end=' ')
-        layer = layers[i].to(dev)
-        full = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
+#     for i in range(len(layers)):
+#         print(f'\nLayer {i}:', flush=True, end=' ')
+#         layer = layers[i].to(dev)
+#         full = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
 
-        bits_config = quant_utils.disable_act_quant(layer)
-        fp_inputs_cache.add_hook(full)
+#         bits_config = quant_utils.disable_act_quant(layer)
+#         fp_inputs_cache.add_hook(full)
 
-        for j in range(args.nsamples):
-            fp_inps[j] = layer(fp_inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
-        fp_inputs_cache.clear_hook()
-        quant_utils.enable_act_quant(layer, bits_config)
+#         for j in range(args.nsamples):
+#             fp_inps[j] = layer(fp_inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+#         fp_inputs_cache.clear_hook()
+#         quant_utils.enable_act_quant(layer, bits_config)
 
-        for names in sequential:
-            subset = {n: full[n] for n in names}
+#         for names in sequential:
+#             subset = {n: full[n] for n in names}
 
-            gptq = {}
-            for name in subset:
-                print(f'{name}', end='  ', flush=True)
-                layer_weight_bits = args.w_bits
-                layer_weight_sym = not (args.w_asym)
-                if 'lm_head' in name:
-                    layer_weight_bits = 16
-                    continue
-                if args.int8_down_proj and 'down_proj' in name:
-                    layer_weight_bits = 8
-                gptq[name] = GPTAQ(subset[name])
-                gptq[name].quantizer = quant_utils.WeightQuantizer()
-                gptq[name].quantizer.configure(
-                    layer_weight_bits, perchannel=True, sym=layer_weight_sym, mse=args.w_clip
-                )
-                gptq[name].fp_inp = fp_inputs_cache.fp_cache[name]
+#             gptq = {}
+#             for name in subset:
+#                 print(f'{name}', end='  ', flush=True)
+#                 layer_weight_bits = args.w_bits
+#                 layer_weight_sym = not (args.w_asym)
+#                 if 'lm_head' in name:
+#                     layer_weight_bits = 16
+#                     continue
+#                 if args.int8_down_proj and 'down_proj' in name:
+#                     layer_weight_bits = 8
+#                 gptq[name] = GPTAQ(subset[name])
+#                 gptq[name].quantizer = quant_utils.WeightQuantizer()
+#                 gptq[name].quantizer.configure(
+#                     layer_weight_bits, perchannel=True, sym=layer_weight_sym, mse=args.w_clip
+#                 )
+#                 gptq[name].fp_inp = fp_inputs_cache.fp_cache[name]
 
-            def add_batch(name):
-                def tmp(_, inp, out):
-                    gptq[name].add_batch(inp[0].data, out.data)
+#             def add_batch(name):
+#                 def tmp(_, inp, out):
+#                     gptq[name].add_batch(inp[0].data, out.data)
 
-                return tmp
+#                 return tmp
 
-            first_module_name = list(subset.keys())[0]
-            handle = subset[first_module_name].register_forward_hook(add_batch(first_module_name))
+#             first_module_name = list(subset.keys())[0]
+#             handle = subset[first_module_name].register_forward_hook(add_batch(first_module_name))
 
-            for j in range(args.nsamples):
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
-            handle.remove()
+#             for j in range(args.nsamples):
+#                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+#             handle.remove()
 
-            # copy H and dXXT
-            for name in subset:
-                if name != first_module_name:
-                    gptq[name].H = gptq[first_module_name].H
-                    gptq[name].dXXT = gptq[first_module_name].dXXT
+#             # copy H and dXXT
+#             for name in subset:
+#                 if name != first_module_name:
+#                     gptq[name].H = gptq[first_module_name].H
+#                     gptq[name].dXXT = gptq[first_module_name].dXXT
 
-            for name in subset:
-                layer_w_groupsize = args.w_groupsize
-                gptq[name].fasterquant(
-                    percdamp=args.percdamp, groupsize=layer_w_groupsize, actorder=args.act_order,
-                    static_groups=args.static_groups
-                )
-                quantizers['model.layers.%d.%s' % (i, name)] = gptq[name].quantizer
-                gptq[name].free()
+#             for name in subset:
+#                 layer_w_groupsize = args.w_groupsize
+#                 gptq[name].fasterquant(
+#                     percdamp=args.percdamp, groupsize=layer_w_groupsize, actorder=args.act_order,
+#                     static_groups=args.static_groups
+#                 )
+#                 quantizers['model.layers.%d.%s' % (i, name)] = gptq[name].quantizer
+#                 gptq[name].free()
 
-        for j in range(args.nsamples):
-            outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+#         for j in range(args.nsamples):
+#             outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
 
-        fp_inputs_cache.clear_cache()
-        layers[i] = layer.cpu()
-        del layer
-        del gptq
-        torch.cuda.empty_cache()
+#         fp_inputs_cache.clear_cache()
+#         layers[i] = layer.cpu()
+#         del layer
+#         del gptq
+#         torch.cuda.empty_cache()
 
-        inps, outs = outs, inps
+#         inps, outs = outs, inps
 
-    model.config.use_cache = use_cache
-    utils.cleanup_memory(verbos=True)
-    logging.info('-----GPTAQ Quantization Done-----\n')
+#     model.config.use_cache = use_cache
+#     utils.cleanup_memory(verbos=True)
+#     logging.info('-----GPTAQ Quantization Done-----\n')
 
-    return quantizers
+#     return quantizers
+
+__all__ = ["GPTAQ"]

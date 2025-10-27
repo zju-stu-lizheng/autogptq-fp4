@@ -28,6 +28,8 @@ parser.add_argument('--dataset', type=str, default='wikitext2',
                     help='数据集，默认为wikitext2')
 parser.add_argument('--only_quantize_mlp', action='store_true', default=False,
                     help='是否只量化MLP层')
+parser.add_argument('--use_gptaq', action='store_true', default=False,
+                    help='是否使用gptaq量化方法')
 args = parser.parse_args()
 
 logging.basicConfig(
@@ -47,11 +49,15 @@ else:
 
 print(pretrained_model_dir, quantized_model_dir)
 
+if args.use_gptaq:
+    quant_method = QUANT_METHOD.GPTAQ
+else:
+    quant_method = QUANT_METHOD.NVFP4
 quantize_config = BaseQuantizeConfig(
     bits=4,  # quantize model to 4-bit
     group_size=16,  # 设置为16以匹配nvfp4的block_size
     desc_act=args.desc_act,  # set to False can significantly speed up inference but the perplexity may slightly bad
-    quant_method=QUANT_METHOD.NVFP4,  # 使用nvfp4量化方法
+    quant_method=quant_method,  # 使用nvfp4量化方法
 )
 
 # load un-quantized model, by default, the model will always be loaded into CPU memory
@@ -77,8 +83,8 @@ elif args.dataset == 'combined':
     # cn_num_calibrations = args.num_calibrations - en_num_calibrations
     train1dataset = get_en_calibration_data(pretrained_model_dir, 128, args.max_length)
     train2dataset = get_cn_calibration_data(pretrained_model_dir, 64, args.max_length)
-    train3dataset = get_combined_calibration_data(pretrained_model_dir, 64, args.max_length)
-    traindataset = train1dataset + train2dataset + train3dataset
+    # train3dataset = get_combined_calibration_data(pretrained_model_dir, 64, args.max_length)
+    traindataset = train1dataset + train2dataset # + train3dataset
     # traindataset = get_combined_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 elif args.dataset == 'en':

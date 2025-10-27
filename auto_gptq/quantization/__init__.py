@@ -8,4 +8,5 @@ from .config import (
     BaseQuantizeConfig,
 )
 from .gptq import GPTQ
+from .gptaq import GPTAQ
 from .quantizer import Quantizer, quantize

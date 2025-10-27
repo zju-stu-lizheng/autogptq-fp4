@@ -25,7 +25,8 @@ from transformers.utils.hub import (
 
 from ..nn_modules._fused_base import FusedBaseAttentionModule, FusedBaseMLPModule
 from ..nn_modules.qlinear import GeneralQuantLinear
-from ..quantization import GPTQ, BaseQuantizeConfig
+from ..quantization import GPTQ, BaseQuantizeConfig, GPTAQ
+from ..quantization.nvfp4_quantizer import NVFP4Quantizer
 from ..quantization.config import (
     CHECKPOINT_FORMAT,
     CHECKPOINT_FORMAT_FIELD,
@@ -67,13 +68,24 @@ from ._utils import (
 )
 
 
+# 设置logger写入文件
 logger = logging.getLogger(__name__)
-handler = logging.StreamHandler()
-formatter = logging.Formatter("%(levelname)s - %(message)s")
-handler.setFormatter(formatter)
-logger.propagate = False
-logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+# 设置日志文件名，可以根据需要更改
+log_file = os.path.join(os.path.dirname(__file__), "/disk1/model/AutoGPTQ/auto_gptq/quantization/gptaq.log")
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+file_handler.setFormatter(formatter)
+if not logger.hasHandlers():
+    logger.addHandler(file_handler)
+
+# logger = logging.getLogger(__name__)
+# handler = logging.StreamHandler()
+# formatter = logging.Formatter("%(levelname)s - %(message)s")
+# handler.setFormatter(formatter)
+# logger.propagate = False
+# logger.addHandler(handler)
+# logger.setLevel(logging.INFO)
 logger.warning(
     "AutoGPTQ has stopped development. Please transition to GPTQModel: https://github.com/ModelCoud/GPTQModel\nGPTQModel has been merged into Transformers/Optimum and full deprecation of AutoGPTQ within HF frameworks is planned in the near-future."
 )
@@ -303,6 +315,9 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     # 根据量化方法选择相应的GPTQ实例
                     if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
                         gptq[name] = GPTQ(subset[name], quant_method="nvfp4")
+                    elif hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                        # print(f"Quantizing {name} in layer {i + 1}/{len(layers)} with GPTAQ...")
+                        gptq[name] = GPTAQ(subset[name], quant_method="nvfp4")
                     else:
                         gptq[name] = GPTQ(subset[name], quant_method="int")
                     
@@ -354,6 +369,20 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             quant_method="nvfp4",
                             nvfp4_block_size=16,
                         )
+                    elif hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                        gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act,
+                            static_groups=self.quantize_config.static_groups,
+                            quant_method="nvfp4",
+                            nvfp4_block_size=16,
+                        )
+                        # 保存GPTQ对象以便后续伪量化使用
+                        if quantizers.get("default") is None:
+                            quantizers[f"default"] = (
+                                gptq[name],  # 保存整个GPTQ对象
+                            )
                     else:
                         scale, zero, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
@@ -361,18 +390,28 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             actorder=self.quantize_config.desc_act,
                             static_groups=self.quantize_config.static_groups,
                         )
-                    # 保存GPTQ对象以便后续伪量化使用
-                    quantizers[f"{self.layers_block_name}.{i}.{name}"] = (
-                        gptq[name],  # 保存整个GPTQ对象
-                        move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
-                        move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
-                        move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device),
-                    )
-                    gptq[name].free()
+                        # 保存GPTQ对象以便后续伪量化使用
+                        quantizers[f"{self.layers_block_name}.{i}.{name}"] = (
+                            gptq[name],  # 保存整个GPTQ对象
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device),
+                        )
+                        gptq[name].free()
+
+
+            if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                default_gptq_quantizer = NVFP4Quantizer()
 
             for j in range(num_batches):
                 layer_input = []
                 for k, layer_inp in enumerate(layer_inputs[j]):
+                    if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                        ### 量化+反量化, 这里需要根据quantizers.get("default")的量化方法进行量化+反量化
+                        layer_inp = default_gptq_quantizer.quantize_activation(layer_inp, block_size=16).to(layer_inp.dtype)
+                    else:
+                        layer_inp = layer_inp
+
                     layer_input.append(move_to_device(layer_inp, cur_layer_device))
 
                 layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
@@ -396,7 +435,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             torch.cuda.empty_cache()
 
         # 对于nvfp4方法，跳过pack_model步骤，因为我们要保存反量化的权重
-        if not (hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4"):
+        if not (hasattr(self.quantize_config, 'quant_method') and (self.quantize_config.quant_method == "nvfp4" or self.quantize_config.quant_method == "gptaq")):
             pack_model(
                 model=self.model,
                 quantizers=quantizers,
@@ -533,7 +572,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             raise EnvironmentError("can only save quantized model, please execute .quantize first.")
         
         # 对于nvfp4方法，重定向到伪量化保存
-        if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
+        if hasattr(self.quantize_config, 'quant_method') and (self.quantize_config.quant_method == "nvfp4" or self.quantize_config.quant_method == "gptaq"):
             logger.info("检测到nvfp4量化方法，使用伪量化保存")
             return self.save_pseudo_quantized(save_dir, use_safetensors, safetensors_metadata)
         
