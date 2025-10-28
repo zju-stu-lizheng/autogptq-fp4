@@ -90,6 +90,10 @@ elif args.dataset == 'combined':
 elif args.dataset == 'en':
     traindataset = get_en_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
     model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
+elif args.dataset == 'recite':
+    traindataset = get_combined_calibration_data('/disk1/model/AutoGPTQ/recite_sample_128.jsonl',pretrained_model_dir, args.num_calibrations//2, args.max_length)
+    train2dataset = get_en_calibration_data(pretrained_model_dir, 64, args.max_length)
+    model.quantize(traindataset+train2dataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp )  # nvfp4不使用triton
 else:
     # raise ValueError(f"Invalid dataset: {args.dataset}")
     examples = get_calibration_data_gptq(pretrained_model_dir=pretrained_model_dir,
