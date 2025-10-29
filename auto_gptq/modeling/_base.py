@@ -370,19 +370,15 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             nvfp4_block_size=16,
                         )
                     elif hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
-                        gptq[name].fasterquant(
-                            percdamp=self.quantize_config.damp_percent,
-                            group_size=self.quantize_config.group_size,
-                            actorder=self.quantize_config.desc_act,
-                            static_groups=self.quantize_config.static_groups,
-                            quant_method="nvfp4",
-                            nvfp4_block_size=16,
-                        )
-                        # 保存GPTQ对象以便后续伪量化使用
-                        if quantizers.get("default") is None:
-                            quantizers[f"default"] = (
-                                gptq[name],  # 保存整个GPTQ对象
-                            )
+                        pass
+                        # gptq[name].fasterquant(
+                        #     percdamp=self.quantize_config.damp_percent,
+                        #     group_size=self.quantize_config.group_size,
+                        #     actorder=self.quantize_config.desc_act,
+                        #     static_groups=self.quantize_config.static_groups,
+                        #     quant_method="nvfp4",
+                        #     nvfp4_block_size=16,
+                        # )
                     else:
                         scale, zero, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
@@ -403,12 +399,16 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
                 default_gptq_quantizer = NVFP4Quantizer()
 
+            mean_activation_quant_error = 0
             for j in range(num_batches):
                 layer_input = []
                 for k, layer_inp in enumerate(layer_inputs[j]):
                     if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                        original_layer_inp = layer_inp.clone()
                         ### 量化+反量化, 这里需要根据quantizers.get("default")的量化方法进行量化+反量化
                         layer_inp = default_gptq_quantizer.quantize_activation(layer_inp, block_size=16).to(layer_inp.dtype)
+                        # print('activation quant error: ', ((layer_inp - original_layer_inp)**2).mean()) 
+                        mean_activation_quant_error += ((layer_inp - original_layer_inp)**2).mean()
                     else:
                         layer_inp = layer_inp
 
@@ -433,6 +433,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             del layer_inputs
             layer_inputs, layer_outputs = layer_outputs, []  # TODO: is it really OK to cache only the first positional argument?
             torch.cuda.empty_cache()
+            mean_activation_quant_error /= num_batches
+            print(f'layer {i + 1}/{len(layers)} mean activation quant error: {mean_activation_quant_error}')
 
         # 对于nvfp4方法，跳过pack_model步骤，因为我们要保存反量化的权重
         if not (hasattr(self.quantize_config, 'quant_method') and (self.quantize_config.quant_method == "nvfp4" or self.quantize_config.quant_method == "gptaq")):
