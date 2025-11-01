@@ -78,7 +78,7 @@ class GPTQ:
 
     def fasterquant(
         self,
-        blocksize=128,
+        blocksize=16,
         percdamp=0.01,
         group_size=-1,
         actorder=False,
@@ -112,20 +112,20 @@ class GPTQ:
         zero = []
         now_idx = 1
 
-        if static_groups:
-            import copy
+        # if static_groups:
+        #     import copy
 
-            groups = []
-            for i in range(0, self.columns, group_size):
-                quantizer = copy.deepcopy(self.quantizer)
-                if quant_method == "nvfp4":
-                    quantizer.find_params(W[:, i : (i + group_size)], weight=True, block_size=nvfp4_block_size)
-                else:
-                    quantizer.find_params(W[:, i : (i + group_size)], weight=True)
-                scale.append(quantizer.scale)
-                if hasattr(quantizer, 'zero'):
-                    zero.append(quantizer.zero)
-                groups.append(quantizer)
+        #     groups = []
+        #     for i in range(0, self.columns, group_size):
+        #         quantizer = copy.deepcopy(self.quantizer)
+        #         if quant_method == "nvfp4":
+        #             quantizer.find_params(W[:, i : (i + group_size)], weight=True, block_size=nvfp4_block_size)
+        #         else:
+        #             quantizer.find_params(W[:, i : (i + group_size)], weight=True)
+        #         scale.append(quantizer.scale)
+        #         if hasattr(quantizer, 'zero'):
+        #             zero.append(quantizer.zero)
+        #         groups.append(quantizer)
 
         if actorder:
             perm = torch.argsort(torch.diag(H), descending=True)
@@ -157,25 +157,22 @@ class GPTQ:
             # 获取当前block的权重
             w_block = W1[:, :]  # shape: (rows, blocksize)
             # 设置量化器参数
-            if not static_groups:
-                if quant_method == "nvfp4":
-                    self.quantizer.find_params(w_block, weight=True, block_size=nvfp4_block_size)
-                else:
-                    self.quantizer.find_params(w_block, weight=True)
-                
-                scale.append(self.quantizer.scale)
-                if hasattr(self.quantizer, 'zero'):
-                    zero.append(self.quantizer.zero)
+            # if not static_groups:
+            if quant_method == "nvfp4":
+                self.quantizer.find_params(w_block, weight=True, block_size=nvfp4_block_size)
             else:
-                if actorder:
-                    idx = perm[i1]
-                self.quantizer = groups[i1 // group_size]
+                self.quantizer.find_params(w_block, weight=True)
+            
+            scale.append(self.quantizer.scale)
+            if hasattr(self.quantizer, 'zero'):
+                zero.append(self.quantizer.zero)
+            # else:
+            #     if actorder:
+            #         idx = perm[i1]
+            #     self.quantizer = groups[i1 // group_size]
             
             # 对整个block进行量化
-            if quant_method == "nvfp4":
-                q_block = self.quantizer.quantize(w_block, block_size=nvfp4_block_size)
-            else:
-                q_block = self.quantizer.quantize(w_block)
+            q_block = self.quantizer.quantize(w_block)
             
             # 计算block内每列的loss和error，并向后传播
             for local_col in range(count):
@@ -240,37 +237,16 @@ class GPTQ:
             zero = torch.cat(zero, dim=1)
             return scale, zero, g_idx
 
-    def pseudo_quantize_to_fp16(self):
-        """
-        获取伪量化的结果：直接返回已经量化好的权重和scales
-        
-        Returns:
-            tuple: (fp16_weights, per_block_scales, g_idx)
-        """
-        if self.quant_method != "nvfp4":
-            raise ValueError("伪量化只支持nvfp4量化方法")
-            
-        if not self.quantizer.ready():
-            raise ValueError("量化器尚未准备好，请先执行fasterquant")
-            
-        # 1. 获取已经量化好的权重（已经是float16格式，因为NVFP4Quantizer.quantize返回的是dequantized结果）
-        fp16_weights = self.layer.weight.data.clone()
-        
-        # 2. 获取per-block scales和scale_2
-        per_block_scales = self.quantizer.scale.clone()
-        scale_2 = self.quantizer.scale_2.clone()
-        
-        # 3. 将两个缩放因子组合成一个字典或元组
-        scales_dict = {
-            'per_block_scale': per_block_scales,
-            'scale_2': scale_2
-        }
-        
-        # 4. 生成g_idx（基于group_size=16）
-        group_size = 16
-        g_idx = torch.tensor([i // group_size for i in range(self.columns)], dtype=torch.int32, device=fp16_weights.device)
-        
-        return fp16_weights, scales_dict, g_idx
+    def rtnquantize(self, method="nvfp4"):
+        if method == "nvfp4":
+            w = self.layer.weight.data.clone()
+            self.quantizer.find_params(w, weight=True)
+            q = self.quantizer.quantize(w)
+            self.layer.weight.data = q
+
+        else:
+            raise ValueError("RTN量化只支持nvfp4量化方法")
+
 
     def free(self):
         if os.environ.get("DEBUG"):

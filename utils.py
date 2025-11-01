@@ -2,6 +2,9 @@ import json
 import random
 from tqdm import tqdm
 from transformers import AutoTokenizer
+import os
+## 获取当前目录
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
 def extract_messages(file_path, max_lines=None):
     """
@@ -102,7 +105,7 @@ def get_wikitext2(nsamples, seed, seqlen, model):
     return traindataset, testenc
 
 def get_cn_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
-    data_path = "ch_datas.json"
+    data_path = os.path.join(current_dir, "ch_datas.json")
     print(f"use {data_path} for calibration, count: {num_calibrations}")
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)
@@ -128,7 +131,7 @@ def get_combined_calibration_data(data_path = "sample_128.jsonl", pretrained_mod
     return examples
 
 def get_en_calibration_data(pretrained_model_dir, num_calibrations=8192, max_length=4096, use_shuffle=True):
-    data_path = "en_datas.json"
+    data_path = os.path.join(current_dir, "en_datas.json")
     print(f"use {data_path} for calibration, count: {num_calibrations}")
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)

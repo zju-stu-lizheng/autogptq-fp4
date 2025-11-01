@@ -77,8 +77,8 @@ class NVFP4Quantizer:
         dev = x.device
         shape = x.shape
         
-        if weight:
-            x = x.flatten(1)
+        # if weight:
+        #     x = x.flatten(1)
         
         # 计算per-tensor缩放因子2
         if weight or self.scale_2 is None:

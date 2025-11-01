@@ -72,7 +72,7 @@ from ._utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 # 设置日志文件名，可以根据需要更改
-log_file = os.path.join(os.path.dirname(__file__), "/disk1/model/AutoGPTQ/auto_gptq/quantization/gptaq.log")
+log_file = os.path.join(os.path.dirname(__file__), "/disk1/model/bench_res/oldAutoGPTQ/auto_gptq/quantization/gptaq.log")
 file_handler = logging.FileHandler(log_file, encoding='utf-8')
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
 file_handler.setFormatter(formatter)
@@ -195,6 +195,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         autotune_warmup_after_quantized: bool = False,
         cache_examples_on_gpu: bool = True,
         only_quantize_mlp: bool = False,
+        use_rtn: bool = False,
     ):
         if self.quantized:
             raise EnvironmentError("can't execute quantize because the model is quantized.")
@@ -335,65 +336,70 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
 
                     return tmp
 
-                handles = []
-                for name in subset:
-                    handles.append(subset[name].register_forward_hook(add_batch(name)))
-                for j in range(num_batches):
-                    layer_input = []
-                    for k, layer_inp in enumerate(layer_inputs[j]):
-                        layer_input.append(move_to_device(layer_inp, cur_layer_device))
+                if not use_rtn:
+                    handles = []
+                    for name in subset:
+                        handles.append(subset[name].register_forward_hook(add_batch(name)))
+                    for j in range(num_batches):
+                        layer_input = []
+                        for k, layer_inp in enumerate(layer_inputs[j]):
+                            layer_input.append(move_to_device(layer_inp, cur_layer_device))
 
-                    layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
-                    additional_layer_inputs = {"attention_mask": layer_attention_mask}
-                    layer_position_ids = (
-                        None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
-                    )
-                    if layer_position_ids is not None:
-                        additional_layer_inputs["position_ids"] = layer_position_ids
-                    for k, v in layer_input_kwargs[j].items():
-                        additional_layer_inputs[k] = nested_move_to_device(v, cur_layer_device)
-                    layer(*layer_input, **additional_layer_inputs)
-                for h in handles:
-                    h.remove()
+                        layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
+                        additional_layer_inputs = {"attention_mask": layer_attention_mask}
+                        layer_position_ids = (
+                            None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
+                        )
+                        if layer_position_ids is not None:
+                            additional_layer_inputs["position_ids"] = layer_position_ids
+                        for k, v in layer_input_kwargs[j].items():
+                            additional_layer_inputs[k] = nested_move_to_device(v, cur_layer_device)
+                        layer(*layer_input, **additional_layer_inputs)
+                    for h in handles:
+                        h.remove()
 
                 for name in subset:
                     logger.info(f"Quantizing {name} in layer {i + 1}/{len(layers)}...")
                     
-                    # 根据量化方法调用相应的fasterquant
-                    if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
-                        scale, zero, g_idx = gptq[name].fasterquant(
-                            percdamp=self.quantize_config.damp_percent,
-                            group_size=self.quantize_config.group_size,
-                            actorder=self.quantize_config.desc_act,
-                            static_groups=self.quantize_config.static_groups,
-                            quant_method="nvfp4",
-                            nvfp4_block_size=16,
-                        )
-                    elif hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
-                        pass
-                        # gptq[name].fasterquant(
-                        #     percdamp=self.quantize_config.damp_percent,
-                        #     group_size=self.quantize_config.group_size,
-                        #     actorder=self.quantize_config.desc_act,
-                        #     static_groups=self.quantize_config.static_groups,
-                        #     quant_method="nvfp4",
-                        #     nvfp4_block_size=16,
-                        # )
+                    if use_rtn:
+                        gptq[name].rtnquantize(method = self.quantize_config.quant_method)
                     else:
-                        scale, zero, g_idx = gptq[name].fasterquant(
-                            percdamp=self.quantize_config.damp_percent,
-                            group_size=self.quantize_config.group_size,
-                            actorder=self.quantize_config.desc_act,
-                            static_groups=self.quantize_config.static_groups,
-                        )
-                        # 保存GPTQ对象以便后续伪量化使用
-                        quantizers[f"{self.layers_block_name}.{i}.{name}"] = (
-                            gptq[name],  # 保存整个GPTQ对象
-                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
-                            move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
-                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device),
-                        )
-                        gptq[name].free()
+                        # 根据量化方法调用相应的fasterquant
+                        if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "nvfp4":
+                            gptq[name].fasterquant(
+                                percdamp=self.quantize_config.damp_percent,
+                                blocksize=16,
+                                group_size=self.quantize_config.group_size,
+                                actorder=self.quantize_config.desc_act,
+                                static_groups=self.quantize_config.static_groups,
+                                quant_method="nvfp4",
+                                nvfp4_block_size=16,
+                            )
+                        elif hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
+                            pass
+                            # gptq[name].fasterquant(
+                            #     percdamp=self.quantize_config.damp_percent,
+                            #     group_size=self.quantize_config.group_size,
+                            #     actorder=self.quantize_config.desc_act,
+                            #     static_groups=self.quantize_config.static_groups,
+                            #     quant_method="nvfp4",
+                            #     nvfp4_block_size=16,
+                            # )
+                        else:
+                            scale, zero, g_idx = gptq[name].fasterquant(
+                                percdamp=self.quantize_config.damp_percent,
+                                group_size=self.quantize_config.group_size,
+                                actorder=self.quantize_config.desc_act,
+                                static_groups=self.quantize_config.static_groups,
+                            )
+                            # 保存GPTQ对象以便后续伪量化使用
+                            quantizers[f"{self.layers_block_name}.{i}.{name}"] = (
+                                gptq[name],  # 保存整个GPTQ对象
+                                move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                                move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
+                                move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            )
+                    gptq[name].free()
 
 
             if hasattr(self.quantize_config, 'quant_method') and self.quantize_config.quant_method == "gptaq":
@@ -409,8 +415,6 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         layer_inp = default_gptq_quantizer.quantize_activation(layer_inp, block_size=16).to(layer_inp.dtype)
                         # print('activation quant error: ', ((layer_inp - original_layer_inp)**2).mean()) 
                         mean_activation_quant_error += ((layer_inp - original_layer_inp)**2).mean()
-                    else:
-                        layer_inp = layer_inp
 
                     layer_input.append(move_to_device(layer_inp, cur_layer_device))
 
