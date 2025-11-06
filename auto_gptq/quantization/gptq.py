@@ -241,7 +241,7 @@ class GPTQ:
         if method == "nvfp4":
             w = self.layer.weight.data.clone()
             self.quantizer.find_params(w, weight=True)
-            q = self.quantizer.quantize(w)
+            q = self.quantizer.quantize(w).to(w.dtype)
             self.layer.weight.data = q
 
         else:

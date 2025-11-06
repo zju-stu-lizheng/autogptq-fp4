@@ -87,9 +87,19 @@ elif args.dataset == 'combined':
 elif args.dataset == 'en':
     traindataset = get_en_calibration_data(pretrained_model_dir, args.num_calibrations, args.max_length)
 elif args.dataset == 'recite':
-    traindataset = get_combined_calibration_data('/disk1/model/bench_res/oldAutoGPTQ/recite_sample_128.jsonl',pretrained_model_dir, args.num_calibrations, args.max_length)
+    traindataset = get_combined_calibration_data('/disk1/model/newgptq/recite_sample_64.jsonl',pretrained_model_dir, args.num_calibrations, args.max_length)
     train2dataset = get_en_calibration_data(pretrained_model_dir, 64, args.max_length)
     traindataset = traindataset + train2dataset
+elif args.dataset == 'recite_en':
+    traindataset = get_combined_calibration_data('/disk1/model/forward_bench/merged_item.jsonl',pretrained_model_dir, args.num_calibrations, args.max_length)
+    train2dataset = get_en_calibration_data(pretrained_model_dir, 64, args.max_length)
+    traindataset = traindataset + train2dataset
+elif args.dataset == 'all_recite':
+    traindataset = get_combined_calibration_data('/disk1/model/forward_bench/prompts-recite-acc0.1-Qwen3-30B-A3B.json',pretrained_model_dir, args.num_calibrations, args.max_length)
+    train2dataset = get_en_calibration_data(pretrained_model_dir, 32, args.max_length)
+    train3dataset = get_cn_calibration_data(pretrained_model_dir, 32, args.max_length)
+    traindataset = traindataset + train2dataset + train3dataset
+
 elif args.dataset == 'combined_recite':
     traindataset = get_combined_calibration_data('/disk1/model/newgptq/recite_sample_64.jsonl',pretrained_model_dir, 64, args.max_length)
     train2dataset = get_en_calibration_data(pretrained_model_dir, 128, args.max_length)
@@ -101,7 +111,9 @@ else:
                                     num_calibrations=args.num_calibrations,
                                     max_length=args.max_length,
                                     use_shuffle=True)
-model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), only_quantize_mlp=args.only_quantize_mlp, use_rtn=args.use_rtn)
+# , ignore_layers=[0, 1, 2, 46, 47]
+model.quantize(traindataset, use_triton=False, cache_examples_on_gpu=False, batch_size=min(args.batch_size,len(traindataset)), 
+only_quantize_mlp=args.only_quantize_mlp, use_rtn=args.use_rtn)
 
 # del examples
 ## 清除显存占用

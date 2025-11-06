@@ -55,7 +55,7 @@ def get_calib_dataset(
 
     return samples
 
-def get_calibration_data_gptq(data_path = "/disk1/model/AutoGPTQ/30b_calibration.json", pretrained_model_dir=None, num_calibrations=8192, max_length=4096, use_shuffle=True):
+def get_calibration_data_gptq(data_path = "/disk1/model/newgptq/30b_calibration.json", pretrained_model_dir=None, num_calibrations=8192, max_length=4096, use_shuffle=True):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
     with open(data_path, "r", encoding="utf-8") as file:
         dataset = json.load(file)
