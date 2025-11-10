@@ -160,6 +160,7 @@ cython_debug/
 #.idea/
 
 *.out
+qwen3_*
 Qwen3-*
 qwen3-0.6-*
 30b_calibration_data.json

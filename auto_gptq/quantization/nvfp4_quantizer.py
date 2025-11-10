@@ -44,8 +44,14 @@ class NVFP4Quantizer:
         
         # 计算per-block scale = per_block_amax / (6.0 * weights_scaling_factor_2)
         per_block_scale = per_block_amax / (6.0 * weights_scaling_factor_2)
+        # 我们这里只处理正区间，clamp到float8的范围最小和最大值
+        float8_min = 0   # e4m3fn 最小正非零，约等于 0.015625
+        float8_max = 448.0     # e4m3fn 最大正数
+        per_block_scale = per_block_scale.clamp(min=float8_min, max=float8_max)
+        
         # 将零值设置为1.0
         per_block_scale[per_block_scale == 0] = 1.0
+        per_block_scale = per_block_scale.to(torch.float8_e4m3fn)
         
         return per_block_scale
         
@@ -82,10 +88,10 @@ class NVFP4Quantizer:
         
         # 计算per-tensor缩放因子2
         if weight or self.scale_2 is None:
-            self.scale_2 = self.get_weights_scaling_factor_2(x).to(dev)
+            self.scale_2 = self.get_weights_scaling_factor_2(x).to(dev).to(torch.float32)
         
         # 计算per-block缩放因子
-        self.scale = self.get_weights_scaling_factor(x, block_size, self.scale_2)
+        self.scale = self.get_weights_scaling_factor(x, block_size, self.scale_2).to(torch.float32)
         
         self.ready_flag = True
         
